@@ -1,0 +1,503 @@
+<svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 900 400"
+    width="900"
+    height="400"
+>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f0b2e" />
+      <stop offset="100%" style="stop-color:#1a1145" />
+    </linearGradient>
+    <linearGradient id="mirrorGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0" />
+      <stop offset="20%" style="stop-color:#6366f1;stop-opacity:0.8" />
+      <stop offset="50%" style="stop-color:#818cf8;stop-opacity:1" />
+      <stop offset="80%" style="stop-color:#6366f1;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#6366f1;stop-opacity:0" />
+    </linearGradient>
+    <linearGradient id="wsLine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#818cf8;stop-opacity:0.3" />
+      <stop offset="50%" style="stop-color:#818cf8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#818cf8;stop-opacity:0.3" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+      <feMerge>
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur" />
+      <feMerge>
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <!-- Dotted line pattern for WebSocket -->
+    <pattern
+            id="dots"
+            x="0"
+            y="0"
+            width="12"
+            height="4"
+            patternUnits="userSpaceOnUse"
+        >
+      <circle cx="2" cy="2" r="1.5" fill="#818cf8" opacity="0.7" />
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="400" fill="url(#bg)" rx="12" />
+
+  <!-- Subtle grid pattern -->
+  <g opacity="0.04" stroke="#818cf8" stroke-width="0.5">
+    <line x1="0" y1="50" x2="900" y2="50" />
+    <line x1="0" y1="100" x2="900" y2="100" />
+    <line x1="0" y1="150" x2="900" y2="150" />
+    <line x1="0" y1="200" x2="900" y2="200" />
+    <line x1="0" y1="250" x2="900" y2="250" />
+    <line x1="0" y1="300" x2="900" y2="300" />
+    <line x1="0" y1="350" x2="900" y2="350" />
+    <line x1="100" y1="0" x2="100" y2="400" />
+    <line x1="200" y1="0" x2="200" y2="400" />
+    <line x1="300" y1="0" x2="300" y2="400" />
+    <line x1="400" y1="0" x2="400" y2="400" />
+    <line x1="500" y1="0" x2="500" y2="400" />
+    <line x1="600" y1="0" x2="600" y2="400" />
+    <line x1="700" y1="0" x2="700" y2="400" />
+    <line x1="800" y1="0" x2="800" y2="400" />
+  </g>
+
+  <!-- ===== TITLE AREA ===== -->
+  <text
+        x="450"
+        y="52"
+        text-anchor="middle"
+        fill="#e0e7ff"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="28"
+        font-weight="700"
+        letter-spacing="4"
+    >KAGAMI</text>
+  <text
+        x="450"
+        y="74"
+        text-anchor="middle"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="11"
+        letter-spacing="2"
+        opacity="0.7"
+    >鏡 — MIRROR LOCAL MACHINES TO THE CLOUD</text>
+
+  <!-- ===== MIRROR LINE (center) ===== -->
+  <rect
+        x="448"
+        y="95"
+        width="4"
+        height="260"
+        rx="2"
+        fill="url(#mirrorGrad)"
+        filter="url(#softGlow)"
+    />
+
+  <!-- Mirror label -->
+  <text
+        x="450"
+        y="375"
+        text-anchor="middle"
+        fill="#6366f1"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        letter-spacing="3"
+        opacity="0.6"
+    >MIRROR PLANE</text>
+
+  <!-- ===== LEFT SIDE: LOCAL MACHINE ===== -->
+
+  <!-- Local machine box -->
+  <rect
+        x="60"
+        y="140"
+        width="180"
+        height="120"
+        rx="8"
+        fill="#1e1b4b"
+        stroke="#312e81"
+        stroke-width="1.5"
+    />
+  <rect x="60" y="140" width="180" height="28" rx="8" fill="#312e81" />
+  <rect x="60" y="160" width="180" height="8" fill="#312e81" />
+
+  <!-- Terminal dots -->
+  <circle cx="78" cy="154" r="4" fill="#ef4444" opacity="0.8" />
+  <circle cx="92" cy="154" r="4" fill="#eab308" opacity="0.8" />
+  <circle cx="106" cy="154" r="4" fill="#22c55e" opacity="0.8" />
+
+  <!-- Terminal text -->
+  <text
+        x="78"
+        y="188"
+        fill="#6366f1"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.9"
+    >$ your-api serve</text>
+  <text
+        x="78"
+        y="203"
+        fill="#4ade80"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >▸ listening :3000</text>
+  <text
+        x="78"
+        y="218"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >▸ HTTP / gRPC / WS</text>
+  <text
+        x="78"
+        y="243"
+        fill="#a5b4fc"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.5"
+    >$ kagami connect</text>
+
+  <!-- Label -->
+  <text
+        x="150"
+        y="130"
+        text-anchor="middle"
+        fill="#e0e7ff"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="10"
+        font-weight="600"
+        letter-spacing="1"
+    >LOCAL MACHINE</text>
+  <text
+        x="150"
+        y="286"
+        text-anchor="middle"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.5"
+        letter-spacing="1"
+    >DARK TO THE WEB</text>
+
+  <!-- ===== KAGAMI PROXY (between local and mirror) ===== -->
+  <rect
+        x="290"
+        y="175"
+        width="110"
+        height="50"
+        rx="6"
+        fill="#1e1b4b"
+        stroke="#6366f1"
+        stroke-width="1"
+        stroke-dasharray="4,3"
+    />
+  <text
+        x="345"
+        y="196"
+        text-anchor="middle"
+        fill="#a5b4fc"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        font-weight="600"
+    >kagami</text>
+  <text
+        x="345"
+        y="212"
+        text-anchor="middle"
+        fill="#6366f1"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.6"
+    >local proxy</text>
+
+  <!-- Arrow: local machine → kagami proxy -->
+  <line
+        x1="240"
+        y1="200"
+        x2="286"
+        y2="200"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.5"
+    />
+  <polyline
+        points="282,196 288,200 282,204"
+        fill="none"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.5"
+    />
+
+  <!-- ===== WEBSOCKET TUNNEL ===== -->
+  <!-- WS lines from proxy to mirror -->
+  <line
+        x1="400"
+        y1="192"
+        x2="448"
+        y2="192"
+        stroke="#818cf8"
+        stroke-width="1"
+        opacity="0.4"
+        stroke-dasharray="3,4"
+    />
+  <line
+        x1="400"
+        y1="200"
+        x2="448"
+        y2="200"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.7"
+        stroke-dasharray="3,4"
+    />
+  <line
+        x1="400"
+        y1="208"
+        x2="448"
+        y2="208"
+        stroke="#818cf8"
+        stroke-width="1"
+        opacity="0.4"
+        stroke-dasharray="3,4"
+    />
+
+  <!-- WS label -->
+  <text
+        x="424"
+        y="228"
+        text-anchor="middle"
+        fill="#6366f1"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="7"
+        opacity="0.5"
+        letter-spacing="1"
+    >WSS</text>
+
+  <!-- ===== RIGHT SIDE: DO REFLECTION ===== -->
+
+  <!-- WS lines from mirror to DO -->
+  <line
+        x1="452"
+        y1="192"
+        x2="500"
+        y2="192"
+        stroke="#818cf8"
+        stroke-width="1"
+        opacity="0.4"
+        stroke-dasharray="3,4"
+    />
+  <line
+        x1="452"
+        y1="200"
+        x2="500"
+        y2="200"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.7"
+        stroke-dasharray="3,4"
+    />
+  <line
+        x1="452"
+        y1="208"
+        x2="500"
+        y2="208"
+        stroke="#818cf8"
+        stroke-width="1"
+        opacity="0.4"
+        stroke-dasharray="3,4"
+    />
+
+  <!-- DO box (reflection - slightly transparent/ethereal) -->
+  <rect
+        x="500"
+        y="175"
+        width="120"
+        height="50"
+        rx="6"
+        fill="#1e1b4b"
+        stroke="#6366f1"
+        stroke-width="1.5"
+        opacity="0.7"
+    />
+  <text
+        x="560"
+        y="196"
+        text-anchor="middle"
+        fill="#a5b4fc"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        font-weight="600"
+        opacity="0.9"
+    >Durable Object</text>
+  <text
+        x="560"
+        y="212"
+        text-anchor="middle"
+        fill="#6366f1"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.5"
+    >digital twin</text>
+
+  <!-- ===== RIGHT SIDE: INCOMING REQUESTS ===== -->
+
+  <!-- Arrow: internet → DO -->
+  <line
+        x1="670"
+        y1="200"
+        x2="624"
+        y2="200"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.5"
+    />
+  <polyline
+        points="628,196 622,200 628,204"
+        fill="none"
+        stroke="#818cf8"
+        stroke-width="1.5"
+        opacity="0.5"
+    />
+
+  <!-- Internet/clients box -->
+  <rect
+        x="670"
+        y="140"
+        width="170"
+        height="120"
+        rx="8"
+        fill="#1e1b4b"
+        stroke="#312e81"
+        stroke-width="1.5"
+        opacity="0.6"
+    />
+
+  <!-- Request lines -->
+  <text
+        x="688"
+        y="165"
+        fill="#22c55e"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >→ GET /api/data</text>
+  <text
+        x="688"
+        y="183"
+        fill="#eab308"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >→ POST /rpc.Service</text>
+  <text
+        x="688"
+        y="201"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >→ WS /stream</text>
+  <text
+        x="688"
+        y="219"
+        fill="#22c55e"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="9"
+        opacity="0.7"
+    >→ ConnectRPC</text>
+  <text
+        x="688"
+        y="243"
+        fill="#a5b4fc"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.4"
+    >your-app.workers.dev</text>
+
+  <!-- Label -->
+  <text
+        x="755"
+        y="130"
+        text-anchor="middle"
+        fill="#e0e7ff"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="10"
+        font-weight="600"
+        letter-spacing="1"
+        opacity="0.8"
+    >THE INTERNET</text>
+  <text
+        x="755"
+        y="286"
+        text-anchor="middle"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.4"
+        letter-spacing="1"
+    >PUBLIC ENDPOINT</text>
+
+  <!-- ===== BOTTOM TAGLINE ===== -->
+  <text
+        x="150"
+        y="340"
+        fill="#4ade80"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.6"
+    >Write a normal API.</text>
+  <text
+        x="370"
+        y="340"
+        fill="#818cf8"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.6"
+    >Kagami mirrors it to the edge.</text>
+  <text
+        x="640"
+        y="340"
+        fill="#e0e7ff"
+        font-family="'SF Mono', 'Fira Code', 'Consolas', monospace"
+        font-size="8"
+        opacity="0.6"
+    >Your machine stays dark.</text>
+
+  <!-- ===== SMALL LOGO MARK ===== -->
+  <g transform="translate(450, 320) scale(0.25)">
+    <polygon
+            points="-65,-37.5 -65,37.5 -22,60 -22,-60"
+            fill="#1e1b4b"
+            stroke="#312e81"
+            stroke-width="2"
+            opacity="0.95"
+        />
+    <rect
+            x="-2"
+            y="-65"
+            width="4"
+            height="130"
+            rx="2"
+            fill="#6366f1"
+            opacity="0.8"
+        />
+    <polygon
+            points="65,-37.5 65,37.5 22,60 22,-60"
+            fill="#6366f1"
+            opacity="0.4"
+        />
+  </g>
+</svg>
