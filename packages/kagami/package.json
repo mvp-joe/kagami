@@ -1,0 +1,40 @@
+{
+  "name": "kagami",
+  "version": "0.0.1",
+  "description": "Local-proxy tunnel tool: Cloudflare Durable Object relay for exposing local services to the internet",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "tunnel",
+    "proxy",
+    "durable-objects"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "hono": "^4.11.9"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260218.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18",
+    "wrangler": "^4.66.0"
+  }
+}

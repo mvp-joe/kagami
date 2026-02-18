@@ -1,0 +1,21 @@
+name = "my-app"
+main = "src/index.ts"
+compatibility_date = "2026-02-01"
+
+[durable_objects]
+bindings = [
+  { name = "TUNNEL", class_name = "TunnelDO" }
+]
+
+[[d1_databases]]
+binding = "KAGAMI_DB"
+database_name = "kagami"
+database_id = "<your-database-id>"
+
+# Set via: wrangler secret put KAGAMI_PROJECT_SECRET
+[vars]
+KAGAMI_BASE_DOMAIN = "kagami.myworkers.dev"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TunnelDO"]
