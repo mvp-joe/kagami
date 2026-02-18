@@ -60,6 +60,10 @@ type AgentConfig struct {
 	// Should be less than the DO-side 30s timeout to allow the agent to respond with an error
 	// before the DO gives up. Parsed as a Go duration string (e.g., "25s", "30s").
 	ProxyTimeout string `toml:"proxy_timeout,omitempty"`
+
+	// Insecure uses ws:// instead of wss:// for the WebSocket connection.
+	// Only for local development (e.g., connecting to wrangler dev).
+	Insecure bool `toml:"insecure,omitempty"`
 }
 
 // TunnelConfig defines a local service to expose.

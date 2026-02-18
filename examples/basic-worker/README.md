@@ -39,6 +39,29 @@ wrangler secret put KAGAMI_PROJECT_SECRET
 wrangler dev
 ```
 
+To test end-to-end locally, register a machine against the local Worker:
+
+```bash
+kagami init --config ./test.toml
+# Worker URL: http://localhost:8787
+# This automatically sets insecure = true (ws:// instead of wss://)
+```
+
+Then add a tunnel and run the agent:
+
+```bash
+kagami tunnel add --config ./test.toml \
+  --name api --local-addr localhost:9000 \
+  --hostname my-test.tunnel.local
+kagami run --config ./test.toml
+```
+
+Send requests through the tunnel using a Host header:
+
+```bash
+curl -H "Host: my-test.tunnel.local:8787" http://localhost:8787/
+```
+
 ## Deploy
 
 ```bash

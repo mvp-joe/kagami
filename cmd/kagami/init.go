@@ -133,6 +133,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 			TunnelID: regResp.TunnelID,
 			Secret:   regResp.Secret,
 			Server:   server,
+			Insecure: u.Scheme == "http",
 		},
 	}
 

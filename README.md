@@ -115,6 +115,7 @@ Register this machine:
 kagami init
 # Prompts for: Worker URL, project secret, machine name
 # Registers with the Worker and saves config to /etc/kagami/kagami.toml
+# Tip: use http://localhost:8787 for local dev with wrangler — sets insecure = true automatically
 ```
 
 Add tunnels for your local services:

@@ -29,6 +29,11 @@ server = "kagami.myworkers.dev"
 # Should be less than the DO-side 30s timeout.
 # proxy_timeout = "25s"
 
+# Use ws:// instead of wss:// for the WebSocket connection.
+# Only for local development (e.g., connecting to wrangler dev).
+# Automatically set by `kagami init` when given an http:// Worker URL.
+# insecure = false
+
 [[tunnel]]
 name = "api"
 local_addr = "localhost:8080"

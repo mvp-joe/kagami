@@ -143,7 +143,11 @@ func (c *Client) Shutdown(timeout time.Duration) {
 // connection was successfully established before the error, or (false, err) if
 // the dial itself failed. The caller uses this to decide whether to reset backoff.
 func (c *Client) connectAndServe(ctx context.Context) (connected bool, err error) {
-	connectURL := fmt.Sprintf("wss://%s/_kagami/connect", c.config.Agent.Server)
+	scheme := "wss"
+	if c.config.Agent.Insecure {
+		scheme = "ws"
+	}
+	connectURL := fmt.Sprintf("%s://%s/_kagami/connect", scheme, c.config.Agent.Server)
 
 	c.logger.Info("connecting", "url", connectURL, "tunnel_id", c.config.Agent.TunnelID)
 
