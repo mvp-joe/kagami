@@ -43,10 +43,18 @@ export interface HttpBodyChunkHeader extends MessageHeader {
   final: boolean;
 }
 
+/**
+ * @deprecated Keepalives now use text "ping"/"pong" messages with
+ * setWebSocketAutoResponse instead of binary-framed PingHeader/PongHeader.
+ */
 export interface PingHeader extends MessageHeader {
   type: "ping";
 }
 
+/**
+ * @deprecated Keepalives now use text "ping"/"pong" messages with
+ * setWebSocketAutoResponse instead of binary-framed PingHeader/PongHeader.
+ */
 export interface PongHeader extends MessageHeader {
   type: "pong";
 }

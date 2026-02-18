@@ -14,8 +14,9 @@
  *    - my-homelab.kagami.myworkers.dev -> my-homelab
  *    - api.my-homelab.kagami.myworkers.dev -> my-homelab
  *    - a.b.c.my-homelab.kagami.myworkers.dev -> my-homelab
- * 5. Route to DO via idFromName(tunnelId)
- * 6. Forward full original request to DO
+ * 5. Enforce Content-Length body size limit (reject with 413 before waking DO)
+ * 6. Route to DO via idFromName(tunnelId)
+ * 7. Forward full original request to DO
  */
 
 import type { MiddlewareHandler } from "hono";
@@ -61,8 +62,9 @@ export function extractTunnelId(
 /**
  * Create the subdomain proxy middleware.
  *
- * Injects X-Kagami-Max-Body-Size and X-Kagami-Chunk-Size headers
- * on the internal fetch to the DO so it knows the configured limits.
+ * Enforces Content-Length body size limit at the middleware layer to avoid
+ * waking the DO for oversized requests. Injects X-Kagami-Chunk-Size header
+ * on the internal fetch to the DO so it knows the configured chunk size.
  */
 export function createProxyMiddleware(
   config?: KagamiConfig,
@@ -88,13 +90,27 @@ export function createProxyMiddleware(
       return;
     }
 
+    // Enforce body size limit at middleware layer (avoids waking DO)
+    const contentLength = c.req.header("Content-Length");
+    if (contentLength) {
+      const length = parseInt(contentLength, 10);
+      if (!isNaN(length) && length > maxBodySize) {
+        return c.json(
+          {
+            error: "payload_too_large",
+            message: "Request body exceeds maximum size",
+          },
+          413,
+        );
+      }
+    }
+
     // Route to the TunnelDO
     const doId = c.env.TUNNEL.idFromName(tunnelId);
     const stub = c.env.TUNNEL.get(doId);
 
     // Clone request with config headers for the DO
     const headers = new Headers(c.req.raw.headers);
-    headers.set("X-Kagami-Max-Body-Size", maxBodySize.toString());
     headers.set("X-Kagami-Chunk-Size", chunkSize.toString());
 
     const doRequest = new Request(c.req.raw, { headers });

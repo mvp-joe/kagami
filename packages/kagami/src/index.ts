@@ -47,8 +47,8 @@ export function createKagami(config?: KagamiConfig): Kagami {
   // Mount management routes (health, register, machines)
   routes.route("/", createManagementRoutes());
 
-  // Mount connect route (passes config to DO via headers)
-  routes.route("/", createConnectRoutes(config));
+  // Mount connect route
+  routes.route("/", createConnectRoutes());
 
   return {
     routes,

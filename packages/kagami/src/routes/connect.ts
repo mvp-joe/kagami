@@ -8,16 +8,10 @@
  */
 
 import { Hono } from "hono";
-import type { KagamiConfig, KagamiEnv } from "../types.js";
+import type { KagamiEnv } from "../types.js";
 import { hashSecret, parseSecretHash, timingSafeEqual } from "../lib/auth.js";
-import { DEFAULT_CHUNK_SIZE } from "../protocol.js";
-import { DEFAULT_MAX_BODY_SIZE } from "../lib/constants.js";
 
-export function createConnectRoutes(
-  config?: KagamiConfig,
-): Hono<{ Bindings: KagamiEnv }> {
-  const maxBodySize = config?.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
-  const chunkSize = config?.chunkSize ?? DEFAULT_CHUNK_SIZE;
+export function createConnectRoutes(): Hono<{ Bindings: KagamiEnv }> {
   const app = new Hono<{ Bindings: KagamiEnv }>();
 
   app.get("/connect", async (c) => {
@@ -98,13 +92,7 @@ export function createConnectRoutes(
     const doId = c.env.TUNNEL.idFromName(tunnelId);
     const stub = c.env.TUNNEL.get(doId);
 
-    // Clone request with config headers for the DO
-    const headers = new Headers(c.req.raw.headers);
-    headers.set("X-Kagami-Max-Body-Size", maxBodySize.toString());
-    headers.set("X-Kagami-Chunk-Size", chunkSize.toString());
-
-    const doRequest = new Request(c.req.raw, { headers });
-    return stub.fetch(doRequest);
+    return stub.fetch(c.req.raw);
   });
 
   return app;

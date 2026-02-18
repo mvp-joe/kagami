@@ -8,17 +8,14 @@
  * - Accept agent WebSocket connection
  * - Relay external HTTP requests to agent via binary-framed WebSocket messages
  * - Correlate responses by request ID
- * - Handle chunking for large bodies
- * - Enforce body size limits
+ * - Stream response bodies back to callers (no full-body buffering)
  * - Return 502 when agent is not connected
  *
  * The DO's fetch() serves two purposes:
  * 1. Agent WebSocket upgrade (from connect route) -- check for Upgrade header
  * 2. HTTP proxy request (from proxy middleware) -- frame and send to agent
  *
- * Config values (maxBodySize, chunkSize) are passed via custom request headers
- * from the proxy middleware and connect route:
- *   X-Kagami-Max-Body-Size
+ * Config values are passed via custom request headers from the proxy middleware:
  *   X-Kagami-Chunk-Size
  */
 
@@ -28,17 +25,13 @@ import type {
   HttpResponseHeader,
   HttpBodyChunkHeader,
   HttpRequestHeader,
-  PongHeader,
   ErrorHeader,
 } from "./protocol.js";
 import {
   encodeFrame,
-  encodeChunked,
   decodeFrame,
-  reassembleChunks,
   DEFAULT_CHUNK_SIZE,
 } from "./protocol.js";
-import { DEFAULT_MAX_BODY_SIZE } from "./lib/constants.js";
 
 /** Default request timeout: 30 seconds */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -52,15 +45,18 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+/** Active response writer for a chunked response stream. */
+interface ResponseWriter {
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export class TunnelDO extends DurableObject {
   /** Map of in-flight request IDs to their pending response resolvers. */
   private pendingRequests = new Map<string, PendingRequest>();
 
-  /** Map of request IDs to buffered body chunks (for chunked responses). */
-  private chunkBuffers = new Map<string, Uint8Array[]>();
-
-  /** Map of request IDs to response headers (for chunked responses). */
-  private chunkedResponseHeaders = new Map<string, HttpResponseHeader>();
+  /** Map of request IDs to active streaming response writers. */
+  private responseWriters = new Map<string, ResponseWriter>();
 
   /**
    * Get the current agent WebSocket, if connected.
@@ -106,35 +102,29 @@ export class TunnelDO extends DurableObject {
     // Accept with Hibernation API, tagged so we can find it later
     this.ctx.acceptWebSocket(server, [AGENT_WS_TAG]);
 
+    // Auto-respond to text "ping" with "pong" without waking the DO.
+    this.ctx.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair("ping", "pong"),
+    );
+
     return new Response(null, { status: 101, webSocket: client });
   }
 
   /**
    * Proxy an external HTTP request to the agent via the WebSocket.
    *
-   * 1. Check body size against maxBodySize -- reject with 413 if exceeded
-   * 2. Check agent is connected -- reject with 502 if not
-   * 3. Frame the request as binary message(s)
-   * 4. Await the response with timeout
+   * 1. Check agent is connected -- reject with 502 if not
+   * 2. Stream the request body as binary frames to the agent
+   * 3. Await the response with timeout
    */
   private async handleHttpProxy(request: Request): Promise<Response> {
-    // Read config from headers (set by proxy middleware / connect route)
-    const maxBodySize = parseInt(
-      request.headers.get("X-Kagami-Max-Body-Size") ?? "",
-      10,
-    ) || DEFAULT_MAX_BODY_SIZE;
+    // Read config from headers (set by proxy middleware)
     const chunkSize = parseInt(
       request.headers.get("X-Kagami-Chunk-Size") ?? "",
       10,
     ) || DEFAULT_CHUNK_SIZE;
 
-    // --- Body size enforcement ---
-    const body = await this.readAndEnforceBodySize(request, maxBodySize);
-    if (body instanceof Response) {
-      return body; // 413 error response
-    }
-
-    // --- Agent connection check ---
+    // --- Agent connection check (before reading body) ---
     const agentWs = this.getAgentWebSocket();
     if (!agentWs) {
       return Response.json(
@@ -183,8 +173,7 @@ export class TunnelDO extends DurableObject {
       const timeout = setTimeout(() => {
         // Timeout: clean up and resolve with 504
         this.pendingRequests.delete(requestId);
-        this.chunkBuffers.delete(requestId);
-        this.chunkedResponseHeaders.delete(requestId);
+        this.abortResponseWriter(requestId);
 
         // Notify agent about the timeout
         const errorHeader: ErrorHeader = {
@@ -213,12 +202,14 @@ export class TunnelDO extends DurableObject {
       this.pendingRequests.set(requestId, { resolve, timeout });
     });
 
-    // Send the framed request to the agent
+    // Stream the request body to the agent
     try {
-      const { frames } = encodeChunked(requestHeader, body, chunkSize);
-      for (const frame of frames) {
-        agentWs.send(frame);
-      }
+      await this.streamRequestBody(
+        request,
+        requestHeader,
+        agentWs,
+        chunkSize,
+      );
     } catch {
       // Failed to send (agent disconnected between check and send)
       const pending = this.pendingRequests.get(requestId);
@@ -236,72 +227,89 @@ export class TunnelDO extends DurableObject {
   }
 
   /**
-   * Read the request body and enforce the max body size limit.
+   * Stream the request body to the agent in chunked frames.
    *
-   * Returns the body as Uint8Array if within limits, or a 413 Response if exceeded.
-   * Handles both Content-Length header and streaming bodies.
+   * Reads the request body in chunkSize-sized pieces, sending each as a
+   * wire frame as soon as it's read. Holds at most one chunk in memory.
+   *
+   * For requests with no body or a body that fits in a single chunk, sends
+   * a single non-chunked http_request frame. For larger bodies, sends an
+   * initial chunked http_request frame followed by http_body_chunk continuation
+   * frames.
    */
-  private async readAndEnforceBodySize(
+  private async streamRequestBody(
     request: Request,
-    maxBodySize: number,
-  ): Promise<Uint8Array | Response> {
+    requestHeader: HttpRequestHeader,
+    agentWs: WebSocket,
+    chunkSize: number,
+  ): Promise<void> {
     // No body for these methods
     if (
       request.method === "GET" ||
       request.method === "HEAD" ||
-      request.method === "OPTIONS"
+      request.method === "OPTIONS" ||
+      !request.body
     ) {
-      return new Uint8Array(0);
+      agentWs.send(encodeFrame(requestHeader, new Uint8Array(0)));
+      return;
     }
 
-    if (!request.body) {
-      return new Uint8Array(0);
-    }
-
-    // Check Content-Length header first for a fast reject
-    const contentLength = request.headers.get("Content-Length");
-    if (contentLength) {
-      const length = parseInt(contentLength, 10);
-      if (!isNaN(length) && length > maxBodySize) {
-        return Response.json(
-          {
-            error: "payload_too_large",
-            message: "Request body exceeds maximum size",
-          },
-          { status: 413 },
-        );
-      }
-    }
-
-    // Read the body incrementally, enforcing the limit for streaming bodies
     const reader = request.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalSize = 0;
+    let buffer = new Uint8Array(0);
+    let sentInitial = false;
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
 
-        totalSize += value.byteLength;
-        if (totalSize > maxBodySize) {
-          reader.cancel();
-          return Response.json(
-            {
-              error: "payload_too_large",
-              message: "Request body exceeds maximum size",
-            },
-            { status: 413 },
-          );
+        if (value) {
+          // Append to buffer
+          buffer = concatUint8Arrays(buffer, value);
         }
 
-        chunks.push(value);
+        if (done) {
+          if (!sentInitial) {
+            // Entire body fits in one frame (or is empty) — send non-chunked.
+            agentWs.send(encodeFrame(requestHeader, buffer));
+          } else {
+            // Send final continuation chunk.
+            const chunkHeader: HttpBodyChunkHeader = {
+              type: "http_body_chunk",
+              id: requestHeader.id,
+              final: true,
+            };
+            agentWs.send(encodeFrame(chunkHeader, buffer));
+          }
+          break;
+        }
+
+        // Flush full chunks from the buffer.
+        while (buffer.byteLength >= chunkSize) {
+          const chunk = buffer.slice(0, chunkSize);
+          buffer = buffer.slice(chunkSize);
+
+          if (!sentInitial) {
+            // First chunk — send as chunked http_request.
+            const chunkedHeader: HttpRequestHeader = {
+              ...requestHeader,
+              chunked: true,
+            };
+            agentWs.send(encodeFrame(chunkedHeader, chunk));
+            sentInitial = true;
+          } else {
+            // Continuation chunk (not final — there's more data or buffer remaining).
+            const chunkHeader: HttpBodyChunkHeader = {
+              type: "http_body_chunk",
+              id: requestHeader.id,
+              final: false,
+            };
+            agentWs.send(encodeFrame(chunkHeader, chunk));
+          }
+        }
       }
     } finally {
       reader.releaseLock();
     }
-
-    return reassembleChunks(chunks);
   }
 
   // --- WebSocket Hibernation API handlers ---
@@ -310,18 +318,17 @@ export class TunnelDO extends DurableObject {
    * Handle incoming WebSocket messages from the agent.
    *
    * Parses binary frames and dispatches based on message type:
-   * - http_response: resolve pending request (or start chunked buffering)
-   * - http_body_chunk: buffer chunks, resolve on final
-   * - ping: respond with pong
+   * - http_response: resolve pending request (or start streaming for chunked)
+   * - http_body_chunk: write chunk to stream, close on final
    * - Malformed messages: log and ignore (don't terminate connection)
    */
   async webSocketMessage(
-    ws: WebSocket,
+    _ws: WebSocket,
     message: ArrayBuffer | string,
   ): Promise<void> {
-    // Only handle binary messages
+    // Text messages are handled by setWebSocketAutoResponse (ping/pong).
+    // The auto-response may still trigger the handler in some edge cases.
     if (typeof message === "string") {
-      console.error("TunnelDO: Received unexpected text message from agent");
       return;
     }
 
@@ -349,10 +356,6 @@ export class TunnelDO extends DurableObject {
         this.handleBodyChunk(header, body);
         break;
 
-      case "ping":
-        this.handlePing(ws, header.id);
-        break;
-
       default:
         console.error(
           `TunnelDO: Unexpected message type from agent: ${header.type}`,
@@ -364,7 +367,9 @@ export class TunnelDO extends DurableObject {
   /**
    * Handle an http_response message from the agent.
    *
-   * If the response is chunked, store the header and buffer the first chunk.
+   * If the response is chunked, create a TransformStream, resolve the pending
+   * promise immediately with the readable side, write the first chunk, and
+   * store the writer for subsequent chunks.
    * If not chunked, resolve the pending request immediately.
    */
   private handleHttpResponse(
@@ -378,9 +383,31 @@ export class TunnelDO extends DurableObject {
     }
 
     if (header.chunked) {
-      // Start buffering chunks
-      this.chunkedResponseHeaders.set(header.id, header);
-      this.chunkBuffers.set(header.id, [body]);
+      // Create a streaming response: resolve immediately with the readable side.
+      const { readable, writable } = new TransformStream<Uint8Array>();
+      const writer = writable.getWriter();
+
+      const responseHeaders = this.buildResponseHeaders(header.headers);
+
+      // Resolve the pending request with the streaming response now.
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(header.id);
+      pending.resolve(
+        new Response(readable, {
+          status: header.status,
+          headers: responseHeaders,
+        }),
+      );
+
+      // Write the first chunk.
+      writer.write(body);
+
+      // Store the writer with a timeout for cleanup.
+      const timeout = setTimeout(() => {
+        this.abortResponseWriter(header.id);
+      }, REQUEST_TIMEOUT_MS);
+
+      this.responseWriters.set(header.id, { writer, timeout });
       return;
     }
 
@@ -400,69 +427,41 @@ export class TunnelDO extends DurableObject {
   /**
    * Handle an http_body_chunk message from the agent.
    *
-   * Buffers chunks by request ID. When the final chunk is received,
-   * reassembles the body and resolves the pending request.
+   * Writes the chunk body to the stored response writer. On final chunk,
+   * closes the writer to signal stream completion.
    */
   private handleBodyChunk(
     header: HttpBodyChunkHeader,
     body: Uint8Array,
   ): void {
-    const pending = this.pendingRequests.get(header.id);
-    if (!pending) {
-      // No pending request (timed out or resolved)
-      this.chunkBuffers.delete(header.id);
-      this.chunkedResponseHeaders.delete(header.id);
+    const rw = this.responseWriters.get(header.id);
+    if (!rw) {
+      // No active writer (timed out, aborted, or protocol error)
       return;
     }
 
-    const chunks = this.chunkBuffers.get(header.id);
-    if (!chunks) {
-      // Received chunk without initial response -- protocol error, ignore
-      console.error(
-        `TunnelDO: Received body chunk for ${header.id} without initial response`,
-      );
-      return;
-    }
-
-    chunks.push(body);
+    rw.writer.write(body);
 
     if (header.final) {
-      // Reassemble and resolve
-      clearTimeout(pending.timeout);
-      this.pendingRequests.delete(header.id);
-
-      const responseHeader = this.chunkedResponseHeaders.get(header.id);
-      this.chunkBuffers.delete(header.id);
-      this.chunkedResponseHeaders.delete(header.id);
-
-      const fullBody = reassembleChunks(chunks);
-      const status = responseHeader?.status ?? 200;
-      const responseHeaders = this.buildResponseHeaders(
-        responseHeader?.headers ?? {},
-      );
-
-      pending.resolve(
-        new Response(fullBody.byteLength > 0 ? fullBody : null, {
-          status,
-          headers: responseHeaders,
-        }),
-      );
+      clearTimeout(rw.timeout);
+      rw.writer.close();
+      this.responseWriters.delete(header.id);
     }
   }
 
   /**
-   * Handle a ping message from the agent.
-   * Respond with a pong using the same ID.
+   * Abort and clean up a response writer for the given request ID.
    */
-  private handlePing(ws: WebSocket, id: string): void {
-    const pongHeader: PongHeader = {
-      type: "pong",
-      id,
-    };
-    try {
-      ws.send(encodeFrame(pongHeader));
-    } catch {
-      // Socket may be closing; ignore
+  private abortResponseWriter(requestId: string): void {
+    const rw = this.responseWriters.get(requestId);
+    if (rw) {
+      clearTimeout(rw.timeout);
+      try {
+        rw.writer.abort("timeout or disconnect");
+      } catch {
+        // Writer may already be closed; ignore
+      }
+      this.responseWriters.delete(requestId);
     }
   }
 
@@ -510,7 +509,7 @@ export class TunnelDO extends DurableObject {
 
   /**
    * Reject all pending requests with 502 (agent disconnected).
-   * Cleans up timeouts and chunk buffers.
+   * Cleans up timeouts, response writers, and chunk buffers.
    */
   private rejectAllPending(): void {
     for (const [id, pending] of this.pendingRequests) {
@@ -521,9 +520,26 @@ export class TunnelDO extends DurableObject {
           { status: 502 },
         ),
       );
-      this.chunkBuffers.delete(id);
-      this.chunkedResponseHeaders.delete(id);
     }
     this.pendingRequests.clear();
+
+    // Abort all active response writers
+    for (const [id, rw] of this.responseWriters) {
+      clearTimeout(rw.timeout);
+      try {
+        rw.writer.abort("agent disconnected");
+      } catch {
+        // Writer may already be closed; ignore
+      }
+    }
+    this.responseWriters.clear();
   }
+}
+
+/** Concatenate two Uint8Arrays into a new Uint8Array. */
+function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const result = new Uint8Array(a.byteLength + b.byteLength);
+  result.set(a, 0);
+  result.set(b, a.byteLength);
+  return result;
 }

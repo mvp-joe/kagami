@@ -5,7 +5,6 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,7 +29,7 @@ const DefaultTimeout = 25 * time.Second
 type Response struct {
 	Status  int
 	Headers map[string][]string
-	Body    []byte
+	Body    io.ReadCloser // caller must close; nil for error responses (502/504)
 }
 
 // Router matches incoming requests to the correct TunnelConfig
@@ -101,9 +100,9 @@ func NewProxy(timeout time.Duration) *Proxy {
 
 // Forward proxies a request described by the wire protocol header and body
 // to the local service identified by the TunnelConfig. It returns the
-// response from the local service, or a 502 response if the service is
-// unreachable.
-func (p *Proxy) Forward(ctx context.Context, cfg *config.TunnelConfig, reqHeader *protocol.HttpRequestHeader, body []byte) (*Response, error) {
+// response from the local service, or a 502/504 response if the service is
+// unreachable or timed out. The caller must close resp.Body if non-nil.
+func (p *Proxy) Forward(ctx context.Context, cfg *config.TunnelConfig, reqHeader *protocol.HttpRequestHeader, body io.Reader) (*Response, error) {
 	scheme := cfg.Protocol
 	if scheme == "" {
 		scheme = "http"
@@ -118,8 +117,8 @@ func (p *Proxy) Forward(ctx context.Context, cfg *config.TunnelConfig, reqHeader
 
 	// Build the outbound request from wire protocol data.
 	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
+	if body != nil {
+		bodyReader = body
 	}
 
 	outReq, err := http.NewRequestWithContext(ctx, reqHeader.Method, target.String(), bodyReader)
@@ -146,12 +145,6 @@ func (p *Proxy) Forward(ctx context.Context, cfg *config.TunnelConfig, reqHeader
 		}
 		return &Response{Status: http.StatusBadGateway}, nil
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
 
 	// Build the response headers map.
 	headers := make(map[string][]string, len(resp.Header))
@@ -160,6 +153,6 @@ func (p *Proxy) Forward(ctx context.Context, cfg *config.TunnelConfig, reqHeader
 	return &Response{
 		Status:  resp.StatusCode,
 		Headers: headers,
-		Body:    respBody,
+		Body:    resp.Body,
 	}, nil
 }

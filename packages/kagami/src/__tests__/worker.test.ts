@@ -22,7 +22,7 @@ import type { KagamiConfig, KagamiEnv } from "../types.js";
 function buildTestKagami(config?: KagamiConfig) {
   const routes = new Hono<{ Bindings: KagamiEnv }>();
   routes.route("/", createManagementRoutes());
-  routes.route("/", createConnectRoutes(config));
+  routes.route("/", createConnectRoutes());
 
   return {
     routes,
@@ -840,13 +840,12 @@ describe("Machine Management (/_kagami/machines)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Body Size Enforcement (TunnelDO)
+// Body Size Enforcement (Middleware)
 // ---------------------------------------------------------------------------
 
 describe("Body Size Enforcement", () => {
-  // We test body size enforcement by configuring a low maxBodySize and
-  // making proxy requests through the middleware. The DO mock is replaced
-  // with one that simulates the TunnelDO's body size check.
+  // Body size is now enforced by the proxy middleware via Content-Length check,
+  // so oversized requests are rejected without waking the DO.
 
   function createBodySizeTestApp(maxBodySize: number) {
     const kagami = buildTestKagami({ maxBodySize });
@@ -856,8 +855,8 @@ describe("Body Size Enforcement", () => {
     app.route("/_kagami", kagami.routes);
     app.all("*", (c) => c.text("Not found", 404));
 
-    // Create a DO namespace that simulates body size enforcement
-    let capturedMaxBodySize: number | null = null;
+    // Create a DO namespace that tracks whether it was called
+    let doFetchCalled = false;
 
     const doNamespace = {
       idFromName(name: string) {
@@ -866,43 +865,7 @@ describe("Body Size Enforcement", () => {
       get(_id: DurableObjectId) {
         return {
           async fetch(request: Request) {
-            const maxSizeHeader = request.headers.get("X-Kagami-Max-Body-Size");
-            capturedMaxBodySize = maxSizeHeader
-              ? parseInt(maxSizeHeader, 10)
-              : null;
-
-            // Simulate the DO's body size check
-            const limit = capturedMaxBodySize ?? 10 * 1024 * 1024;
-
-            // Check Content-Length first
-            const contentLength = request.headers.get("Content-Length");
-            if (contentLength) {
-              const length = parseInt(contentLength, 10);
-              if (!isNaN(length) && length > limit) {
-                return Response.json(
-                  {
-                    error: "payload_too_large",
-                    message: "Request body exceeds maximum size",
-                  },
-                  { status: 413 },
-                );
-              }
-            }
-
-            // Read the body to check actual size
-            if (request.body) {
-              const body = await request.arrayBuffer();
-              if (body.byteLength > limit) {
-                return Response.json(
-                  {
-                    error: "payload_too_large",
-                    message: "Request body exceeds maximum size",
-                  },
-                  { status: 413 },
-                );
-              }
-            }
-
+            doFetchCalled = true;
             return new Response("proxied ok");
           },
         } as unknown as DurableObjectStub;
@@ -916,7 +879,7 @@ describe("Body Size Enforcement", () => {
       TUNNEL: doNamespace,
     };
 
-    return { app, env, getCapturedMaxBodySize: () => capturedMaxBodySize };
+    return { app, env, wasDoFetchCalled: () => doFetchCalled };
   }
 
   it("request body at max size is accepted", async () => {
@@ -955,17 +918,58 @@ describe("Body Size Enforcement", () => {
     expect(json.error).toBe("payload_too_large");
   });
 
-  it("passes configured maxBodySize to DO via X-Kagami-Max-Body-Size header", async () => {
-    const maxSize = 2048;
-    const { app, env, getCapturedMaxBodySize } =
-      createBodySizeTestApp(maxSize);
+  it("oversized Content-Length returns 413 without calling DO", async () => {
+    const maxSize = 1024;
+    const { app, env, wasDoFetchCalled } = createBodySizeTestApp(maxSize);
+
+    const res = await app.request("http://localhost/test", {
+      method: "POST",
+      headers: {
+        Host: "my-tunnel.kagami.myworkers.dev",
+        "Content-Length": (maxSize + 1).toString(),
+      },
+      body: new Uint8Array(maxSize + 1),
+    }, env);
+
+    expect(res.status).toBe(413);
+    expect(wasDoFetchCalled()).toBe(false);
+  });
+
+  it("does not send X-Kagami-Max-Body-Size header to DO", async () => {
+    let capturedHeaders: Headers | null = null;
+
+    const kagami = buildTestKagami({ maxBodySize: 2048 });
+    const app = new Hono<{ Bindings: KagamiEnv }>();
+    app.use("*", kagami.proxy);
+
+    const doNamespace = {
+      idFromName(name: string) {
+        return { name } as unknown as DurableObjectId;
+      },
+      get(_id: DurableObjectId) {
+        return {
+          async fetch(request: Request) {
+            capturedHeaders = request.headers;
+            return new Response("ok");
+          },
+        } as unknown as DurableObjectStub;
+      },
+    } as unknown as KagamiEnv["TUNNEL"];
+
+    const env: KagamiEnv = {
+      KAGAMI_DB: createMockD1(),
+      KAGAMI_PROJECT_SECRET: PROJECT_SECRET,
+      KAGAMI_BASE_DOMAIN: BASE_DOMAIN,
+      TUNNEL: doNamespace,
+    };
 
     await app.request("http://localhost/test", {
       method: "GET",
       headers: { Host: "my-tunnel.kagami.myworkers.dev" },
     }, env);
 
-    expect(getCapturedMaxBodySize()).toBe(maxSize);
+    expect(capturedHeaders).not.toBeNull();
+    expect(capturedHeaders!.get("X-Kagami-Max-Body-Size")).toBeNull();
   });
 });
 

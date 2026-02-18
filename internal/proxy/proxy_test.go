@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -238,6 +239,21 @@ func addrFromServer(srv *httptest.Server) string {
 	return strings.TrimPrefix(srv.URL, "http://")
 }
 
+// readBody reads the entire resp.Body and returns the bytes.
+// Handles nil Body (error responses).
+func readBody(t *testing.T, resp *Response) []byte {
+	t.Helper()
+	if resp.Body == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	return data
+}
+
 func TestProxy_Forward_RoutesToCorrectService(t *testing.T) {
 	t.Parallel()
 
@@ -260,11 +276,13 @@ func TestProxy_Forward_RoutesToCorrectService(t *testing.T) {
 		t.Fatalf("Forward: %v", err)
 	}
 
+	body := readBody(t, resp)
+
 	if resp.Status != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.Status, http.StatusOK)
 	}
-	if string(resp.Body) != `{"ok":true}` {
-		t.Errorf("body = %q, want %q", resp.Body, `{"ok":true}`)
+	if string(body) != `{"ok":true}` {
+		t.Errorf("body = %q, want %q", body, `{"ok":true}`)
 	}
 
 	rec := <-reqCh
@@ -298,6 +316,10 @@ func TestProxy_Forward_Returns502WhenUnreachable(t *testing.T) {
 	if resp.Status != http.StatusBadGateway {
 		t.Errorf("status = %d, want %d", resp.Status, http.StatusBadGateway)
 	}
+	if resp.Body != nil {
+		resp.Body.Close()
+		t.Error("expected nil Body for error response")
+	}
 }
 
 func TestProxy_Forward_PreservesRequestHeaders(t *testing.T) {
@@ -311,7 +333,7 @@ func TestProxy_Forward_PreservesRequestHeaders(t *testing.T) {
 	}
 
 	p := NewProxy(5 * time.Second)
-	_, err := p.Forward(context.Background(), cfg, &protocol.HttpRequestHeader{
+	resp, err := p.Forward(context.Background(), cfg, &protocol.HttpRequestHeader{
 		Method: "POST",
 		Host:   "api.example.com",
 		Path:   "/submit",
@@ -320,9 +342,12 @@ func TestProxy_Forward_PreservesRequestHeaders(t *testing.T) {
 			"X-Custom-Header": {"custom-value"},
 			"Accept":          {"text/html", "application/json"},
 		},
-	}, []byte(`{"data":"test"}`))
+	}, bytes.NewReader([]byte(`{"data":"test"}`)))
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
+	}
+	if resp.Body != nil {
+		resp.Body.Close()
 	}
 
 	rec := <-reqCh
@@ -367,6 +392,9 @@ func TestProxy_Forward_PreservesResponseHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
+	if resp.Body != nil {
+		resp.Body.Close()
+	}
 
 	if resp.Status != http.StatusCreated {
 		t.Errorf("status = %d, want %d", resp.Status, http.StatusCreated)
@@ -408,13 +436,15 @@ func TestProxy_Forward_HandlesBinaryResponseBody(t *testing.T) {
 		t.Fatalf("Forward: %v", err)
 	}
 
+	body := readBody(t, resp)
+
 	if resp.Status != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.Status, http.StatusOK)
 	}
-	if len(resp.Body) != len(binaryData) {
-		t.Fatalf("body length = %d, want %d", len(resp.Body), len(binaryData))
+	if len(body) != len(binaryData) {
+		t.Fatalf("body length = %d, want %d", len(body), len(binaryData))
 	}
-	for i, b := range resp.Body {
+	for i, b := range body {
 		if b != binaryData[i] {
 			t.Errorf("body[%d] = 0x%02X, want 0x%02X", i, b, binaryData[i])
 		}
@@ -450,6 +480,9 @@ func TestProxy_Forward_TimesOutSlowService(t *testing.T) {
 	}, nil)
 	if err != nil {
 		t.Fatalf("Forward: %v", err)
+	}
+	if resp.Body != nil {
+		resp.Body.Close()
 	}
 
 	if resp.Status != http.StatusGatewayTimeout {

@@ -5,9 +5,11 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -20,10 +22,11 @@ import (
 	"github.com/jward/kagami/internal/proxy"
 )
 
-// chunkBuffer accumulates body chunks for a single chunked request.
-type chunkBuffer struct {
+// streamBuffer holds a pipe writer for streaming chunked request body data
+// to a goroutine that is proxying the request to a local service.
+type streamBuffer struct {
 	header *protocol.HttpRequestHeader
-	chunks [][]byte
+	writer *io.PipeWriter
 }
 
 // Client manages a WebSocket tunnel connection to the Cloudflare DO.
@@ -45,9 +48,9 @@ type Client struct {
 	// In-flight request tracking for graceful shutdown.
 	inflight sync.WaitGroup
 
-	// Chunk buffers for chunked request reassembly, guarded by chunkMu.
-	chunkMu      sync.Mutex
-	chunkBuffers map[string]*chunkBuffer
+	// Stream buffers for chunked request body streaming, guarded by streamMu.
+	streamMu      sync.Mutex
+	streamBuffers map[string]*streamBuffer
 }
 
 // NewClient creates a tunnel Client with the given dependencies.
@@ -75,7 +78,7 @@ func NewClient(cfg *config.Config, router *proxy.Router, p *proxy.Proxy, logger 
 		pingInterval:         pingInterval,
 		reconnectInterval:    reconnectInterval,
 		maxReconnectInterval: maxReconnectInterval,
-		chunkBuffers:         make(map[string]*chunkBuffer),
+		streamBuffers:        make(map[string]*streamBuffer),
 	}, nil
 }
 
@@ -171,18 +174,28 @@ func (c *Client) connectAndServe(ctx context.Context) (connected bool, err error
 
 	// Read messages until disconnect or context cancellation.
 	for {
-		_, data, err := conn.Read(ctx)
+		msgType, data, err := conn.Read(ctx)
 		if err != nil {
 			c.mu.Lock()
 			c.conn = nil
 			c.mu.Unlock()
 			return true, fmt.Errorf("read: %w", err)
 		}
+
+		// Text messages are pong replies from the DO's auto-response.
+		if msgType == websocket.MessageText {
+			if string(data) == "pong" {
+				c.logger.Debug("pong received")
+			}
+			continue
+		}
+
 		c.handleRawMessage(ctx, conn, data)
 	}
 }
 
-// pingLoop sends periodic ping frames to the DO.
+// pingLoop sends periodic text "ping" messages to the DO.
+// The DO uses setWebSocketAutoResponse to reply with "pong" without waking.
 func (c *Client) pingLoop(ctx context.Context, conn *websocket.Conn) {
 	ticker := time.NewTicker(c.pingInterval)
 	defer ticker.Stop()
@@ -192,18 +205,7 @@ func (c *Client) pingLoop(ctx context.Context, conn *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			header := &protocol.PingHeader{
-				MessageHeader: protocol.MessageHeader{
-					Type: "ping",
-					ID:   "",
-				},
-			}
-			frame, err := protocol.EncodeFrame(header, nil)
-			if err != nil {
-				c.logger.Error("encoding ping", "error", err)
-				continue
-			}
-			if err := conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
+			if err := conn.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
 				c.logger.Debug("ping write failed (connection may be closing)", "error", err)
 				return
 			}
@@ -231,8 +233,6 @@ func (c *Client) handleRawMessage(ctx context.Context, conn *websocket.Conn, dat
 		c.handleHttpRequest(ctx, conn, frame)
 	case "http_body_chunk":
 		c.handleBodyChunk(ctx, conn, frame)
-	case "pong":
-		c.logger.Debug("pong received")
 	case "error":
 		var errHeader protocol.ErrorHeader
 		if err := json.Unmarshal(frame.Header, &errHeader); err != nil {
@@ -254,60 +254,83 @@ func (c *Client) handleHttpRequest(ctx context.Context, conn *websocket.Conn, fr
 	}
 
 	if reqHeader.Chunked {
-		// First chunk of a chunked request — buffer and wait for continuation.
-		c.chunkMu.Lock()
-		c.chunkBuffers[reqHeader.ID] = &chunkBuffer{
+		// First chunk of a chunked request — create pipe and start processing.
+		pr, pw := io.Pipe()
+
+		c.streamMu.Lock()
+		c.streamBuffers[reqHeader.ID] = &streamBuffer{
 			header: &reqHeader,
-			chunks: [][]byte{frame.Body},
+			writer: pw,
 		}
-		c.chunkMu.Unlock()
-		c.logger.Debug("buffering chunked request", "id", reqHeader.ID)
+		c.streamMu.Unlock()
+
+		// Start processing in a goroutine first — it reads from the pipe reader.
+		// Must start before writing to the pipe, because pw.Write blocks until
+		// the reader consumes the data (io.Pipe is unbuffered).
+		firstChunk := frame.Body
+		c.inflight.Go(func() {
+			defer pr.Close()
+			c.processRequest(ctx, conn, &reqHeader, pr)
+		})
+
+		// Write the first chunk into the pipe. Blocks until processRequest's
+		// Forward call starts reading the body.
+		if _, err := pw.Write(firstChunk); err != nil {
+			c.logger.Error("writing first chunk to pipe", "error", err)
+			pw.Close()
+			return
+		}
+
+		c.logger.Debug("streaming chunked request", "id", reqHeader.ID)
 		return
 	}
 
 	// Non-chunked: process immediately in a goroutine.
+	body := frame.Body
 	c.inflight.Go(func() {
-		c.processRequest(ctx, conn, &reqHeader, frame.Body)
+		c.processRequest(ctx, conn, &reqHeader, bytes.NewReader(body))
 	})
 }
 
-// handleBodyChunk buffers a continuation chunk and processes the complete
-// request when the final chunk arrives.
-func (c *Client) handleBodyChunk(ctx context.Context, conn *websocket.Conn, frame protocol.Frame) {
+// handleBodyChunk writes a continuation chunk to the streaming pipe and
+// closes the pipe writer on the final chunk (signaling EOF to the reader).
+func (c *Client) handleBodyChunk(_ context.Context, _ *websocket.Conn, frame protocol.Frame) {
 	var chunkHeader protocol.HttpBodyChunkHeader
 	if err := json.Unmarshal(frame.Header, &chunkHeader); err != nil {
 		c.logger.Error("parsing http_body_chunk header", "error", err)
 		return
 	}
 
-	c.chunkMu.Lock()
-	buf, ok := c.chunkBuffers[chunkHeader.ID]
+	c.streamMu.Lock()
+	sb, ok := c.streamBuffers[chunkHeader.ID]
 	if !ok {
-		c.chunkMu.Unlock()
+		c.streamMu.Unlock()
 		c.logger.Warn("chunk for unknown request", "id", chunkHeader.ID)
 		return
 	}
 
-	buf.chunks = append(buf.chunks, frame.Body)
-
-	if !chunkHeader.Final {
-		c.chunkMu.Unlock()
-		return
+	if chunkHeader.Final {
+		delete(c.streamBuffers, chunkHeader.ID)
+		c.streamMu.Unlock()
+	} else {
+		c.streamMu.Unlock()
 	}
 
-	// Final chunk — remove buffer and process.
-	delete(c.chunkBuffers, chunkHeader.ID)
-	c.chunkMu.Unlock()
+	// Write chunk data to the pipe.
+	if len(frame.Body) > 0 {
+		if _, err := sb.writer.Write(frame.Body); err != nil {
+			c.logger.Error("writing chunk to pipe", "error", err, "id", chunkHeader.ID)
+		}
+	}
 
-	body := protocol.ReassembleChunks(buf.chunks)
-
-	c.inflight.Go(func() {
-		c.processRequest(ctx, conn, buf.header, body)
-	})
+	if chunkHeader.Final {
+		// Close the writer to signal EOF to the reader.
+		sb.writer.Close()
+	}
 }
 
-// processRequest routes and proxies a complete request, then sends the response.
-func (c *Client) processRequest(ctx context.Context, conn *websocket.Conn, reqHeader *protocol.HttpRequestHeader, body []byte) {
+// processRequest routes and proxies a complete request, then streams the response.
+func (c *Client) processRequest(ctx context.Context, conn *websocket.Conn, reqHeader *protocol.HttpRequestHeader, body io.Reader) {
 	logger := c.logger.With("id", reqHeader.ID, "method", reqHeader.Method, "host", reqHeader.Host, "path", reqHeader.Path)
 	logger.Info("processing request")
 
@@ -324,6 +347,9 @@ func (c *Client) processRequest(ctx context.Context, conn *websocket.Conn, reqHe
 		c.sendErrorResponse(ctx, conn, reqHeader.ID, http.StatusBadGateway, "proxy error")
 		return
 	}
+	if resp.Body != nil {
+		defer resp.Body.Close()
+	}
 
 	logger.Info("request completed", "status", resp.Status)
 
@@ -332,7 +358,9 @@ func (c *Client) processRequest(ctx context.Context, conn *websocket.Conn, reqHe
 	}
 }
 
-// sendResponse frames and sends an HTTP response back over the WebSocket.
+// sendResponse streams an HTTP response body over the WebSocket in chunked frames.
+// Reads the body in ChunkSize-sized chunks and sends each as it's read,
+// holding at most one chunk (~512KB) in memory at a time.
 func (c *Client) sendResponse(ctx context.Context, conn *websocket.Conn, requestID string, resp *proxy.Response) error {
 	respHeader := &protocol.HttpResponseHeader{
 		MessageHeader: protocol.MessageHeader{
@@ -343,26 +371,102 @@ func (c *Client) sendResponse(ctx context.Context, conn *websocket.Conn, request
 		Headers: resp.Headers,
 	}
 
-	if len(resp.Body) <= protocol.ChunkSize {
-		// Single frame.
-		frame, err := protocol.EncodeFrame(respHeader, resp.Body)
+	// No body (error responses like 502/504 have nil Body).
+	if resp.Body == nil {
+		frame, err := protocol.EncodeFrame(respHeader, nil)
 		if err != nil {
 			return fmt.Errorf("encoding response frame: %w", err)
 		}
 		return conn.Write(ctx, websocket.MessageBinary, frame)
 	}
 
-	// Chunked response.
-	frames, err := protocol.ChunkBody(respHeader, resp.Body, protocol.ChunkSize)
-	if err != nil {
-		return fmt.Errorf("chunking response: %w", err)
+	// Read the first chunk to determine if the body fits in a single frame.
+	buf := make([]byte, protocol.ChunkSize)
+	n, err := io.ReadFull(resp.Body, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return fmt.Errorf("reading response body: %w", err)
+	}
+	firstChunk := buf[:n]
+
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		// Entire body fits in a single frame.
+		frame, encErr := protocol.EncodeFrame(respHeader, firstChunk)
+		if encErr != nil {
+			return fmt.Errorf("encoding response frame: %w", encErr)
+		}
+		return conn.Write(ctx, websocket.MessageBinary, frame)
 	}
 
-	for _, frame := range frames {
+	// Body is larger than one chunk — need to check if there's more data.
+	// Read one more byte to confirm.
+	extra := make([]byte, 1)
+	n2, err2 := resp.Body.Read(extra)
+	if n2 == 0 && (err2 == io.EOF) {
+		// Body was exactly ChunkSize bytes.
+		frame, encErr := protocol.EncodeFrame(respHeader, firstChunk)
+		if encErr != nil {
+			return fmt.Errorf("encoding response frame: %w", encErr)
+		}
+		return conn.Write(ctx, websocket.MessageBinary, frame)
+	}
+
+	// Multi-chunk response: send initial frame with chunked=true.
+	respHeader.Chunked = true
+	frame, encErr := protocol.EncodeFrame(respHeader, firstChunk)
+	if encErr != nil {
+		return fmt.Errorf("encoding chunked response header: %w", encErr)
+	}
+	if err := conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
+		return fmt.Errorf("writing chunked response header: %w", err)
+	}
+
+	// Prepend the extra byte to the next read cycle.
+	var leftover []byte
+	if n2 > 0 {
+		leftover = extra[:n2]
+	}
+
+	// Stream continuation chunks.
+	for {
+		var chunkData []byte
+
+		if leftover != nil {
+			// Start with leftover byte(s) from the probe read.
+			copy(buf, leftover)
+			n, err = io.ReadFull(resp.Body, buf[len(leftover):])
+			n += len(leftover)
+			leftover = nil
+		} else {
+			n, err = io.ReadFull(resp.Body, buf)
+		}
+		chunkData = buf[:n]
+
+		isFinal := err == io.ErrUnexpectedEOF || err == io.EOF
+		if err != nil && !isFinal {
+			return fmt.Errorf("reading response body chunk: %w", err)
+		}
+
+		chunkHeader := &protocol.HttpBodyChunkHeader{
+			MessageHeader: protocol.MessageHeader{
+				Type: "http_body_chunk",
+				ID:   requestID,
+			},
+			Final: isFinal,
+		}
+
+		frame, encErr := protocol.EncodeFrame(chunkHeader, chunkData)
+		if encErr != nil {
+			return fmt.Errorf("encoding body chunk: %w", encErr)
+		}
 		if err := conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
-			return fmt.Errorf("writing response chunk: %w", err)
+			return fmt.Errorf("writing body chunk: %w", err)
+		}
+
+		if isFinal {
+			break
 		}
 	}
+
 	return nil
 }
 

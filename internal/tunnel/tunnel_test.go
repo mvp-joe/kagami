@@ -792,9 +792,9 @@ func TestNewClient_ParsesDurations(t *testing.T) {
 	}
 }
 
-// TestChunkBufferCleanup verifies that chunk buffers are removed after
+// TestStreamBufferCleanup verifies that stream buffers are removed after
 // the final chunk is processed.
-func TestChunkBufferCleanup(t *testing.T) {
+func TestStreamBufferCleanup(t *testing.T) {
 	t.Parallel()
 
 	localSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -892,12 +892,12 @@ func TestChunkBufferCleanup(t *testing.T) {
 	// Give goroutines a moment to finish.
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify chunk buffer was cleaned up.
-	client.chunkMu.Lock()
-	bufLen := len(client.chunkBuffers)
-	client.chunkMu.Unlock()
+	// Verify stream buffer was cleaned up.
+	client.streamMu.Lock()
+	bufLen := len(client.streamBuffers)
+	client.streamMu.Unlock()
 
 	if bufLen != 0 {
-		t.Errorf("chunk buffer has %d entries, want 0 (should be cleaned up after final chunk)", bufLen)
+		t.Errorf("stream buffer has %d entries, want 0 (should be cleaned up after final chunk)", bufLen)
 	}
 }

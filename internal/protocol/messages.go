@@ -34,11 +34,15 @@ type HttpBodyChunkHeader struct {
 }
 
 // PingHeader is a keepalive from agent to DO. No body.
+// Deprecated: keepalives now use text "ping"/"pong" messages with
+// setWebSocketAutoResponse instead of binary-framed PingHeader/PongHeader.
 type PingHeader struct {
 	MessageHeader
 }
 
 // PongHeader is a keepalive response from DO to agent. No body.
+// Deprecated: keepalives now use text "ping"/"pong" messages with
+// setWebSocketAutoResponse instead of binary-framed PingHeader/PongHeader.
 type PongHeader struct {
 	MessageHeader
 }
