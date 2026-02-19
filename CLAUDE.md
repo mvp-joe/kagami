@@ -7,7 +7,7 @@ Local-proxy tunnel tool: Go agent ↔ Cloudflare Durable Object ↔ external HTT
 - **NPM package** (`packages/kagami/`) — Hono routes + proxy middleware + TunnelDO class. Users integrate into their own Worker.
 - **Go agent** (`cmd/kagami/`) — Single binary with subcommands. Connects outbound via WebSocket to the DO.
 - **D1** — Machine registry. Per-machine secrets hashed and stored during registration.
-- **Wire protocol** — WebSocket binary frames: `[4-byte header length][JSON header][raw body bytes]`. Chunking for bodies > 1 MiB.
+- **Wire protocol** — WebSocket binary frames: `[4-byte header length][JSON header][raw body bytes]`. Chunking for bodies > 512 KB.
 
 ## Key Directories
 
@@ -48,8 +48,8 @@ cd examples/basic-worker && npm install && wrangler dev
 - **Routing**: Host matching `*.KAGAMI_BASE_DOMAIN` → proxy. Tunnel ID = rightmost subdomain label before BASE_DOMAIN. Full Host forwarded to agent.
 - **Worker bindings**: `TUNNEL` (DO namespace), `KAGAMI_DB` (D1), `KAGAMI_PROJECT_SECRET` (secret), `KAGAMI_BASE_DOMAIN` (var).
 - **Management routes**: All under `/_kagami/` prefix.
-- **Body limits**: Enforced at DO (default 10MB). Agent-side services are trusted.
-- **Go style**: `internal/` packages, cobra CLI, slog for logging, `net/http/httputil.ReverseProxy` for proxying.
+- **Body limits**: Enforced at proxy middleware (default 10MB, returns 413 before waking DO). Agent-side services are trusted.
+- **Go style**: `internal/` packages, cobra CLI, slog for logging, `http.Client` with custom `http.Transport` for proxying.
 
 ## Spec
 
