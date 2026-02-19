@@ -50,9 +50,16 @@ func NewRouter(tunnels []config.TunnelConfig) *Router {
 //  1. Hostname match (exact match against TunnelConfig.Hostname)
 //  2. Path prefix match (longest matching prefix wins)
 func (r *Router) Match(host, path string) *config.TunnelConfig {
+	// Strip port from host (e.g., "api.example.com:8787" → "api.example.com")
+	// since tunnel config hostnames never include ports.
+	hostOnly := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostOnly = h
+	}
+
 	// First pass: hostname match.
 	for i := range r.tunnels {
-		if r.tunnels[i].Hostname != "" && r.tunnels[i].Hostname == host {
+		if r.tunnels[i].Hostname != "" && r.tunnels[i].Hostname == hostOnly {
 			return &r.tunnels[i]
 		}
 	}

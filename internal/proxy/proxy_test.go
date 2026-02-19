@@ -170,6 +170,20 @@ func TestRouter_Match_PathPrefixMatch(t *testing.T) {
 	}
 }
 
+func TestRouter_Match_HostnameWithPort(t *testing.T) {
+	t.Parallel()
+	r := NewRouter(testTunnels())
+
+	// Host header with port should still match hostname without port.
+	got := r.Match("api.my-homelab.kagami.myworkers.dev:8787", "/users")
+	if got == nil {
+		t.Fatal("expected a match when host includes port, got nil")
+	}
+	if got.Name != "api" {
+		t.Errorf("name = %q, want %q", got.Name, "api")
+	}
+}
+
 func TestRouter_Match_HostnameTakesPriority(t *testing.T) {
 	t.Parallel()
 

@@ -21,6 +21,9 @@ dist/
 *.swo
 *~
 
+# Exercise sessions (scratch has machine secrets from local testing)
+.exercise/sessions/*/scratch/
+
 # OS
 .DS_Store
 Thumbs.db
